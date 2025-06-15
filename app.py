@@ -1,7 +1,5 @@
 import streamlit as st
 import openai as op
-import pyaudio
-import wave
 import os
 import time
 import json
@@ -21,10 +19,10 @@ import matplotlib.pyplot as plt
 from transformers import pipeline
 import re
 
-# Configuração das APIs
-op.api_key = os.getenv('OPENAI_API_KEY', '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')
-GOOGLE_API_KEY = "AIzaSyDIUhxzxID7vmlnzzRCT4Qdu9cFKGO0dcw"  # Substitua por sua chave real
-GOOGLE_CX = "76d77ecfde40f4253"  # Substitua por seu CX real
+# Configuração das APIs usando secrets do Streamlit
+op.api_key = st.secrets['OPENAI_API_KEY']
+GOOGLE_API_KEY = st.secrets['GOOGLE_API_KEY']
+GOOGLE_CX = st.secrets['GOOGLE_CX']
 
 # Sistema de auto-atualização e pesquisa
 class AutonomousAssistant:
@@ -308,7 +306,7 @@ class AutonomousAssistant:
     def business_intelligence_dashboard(self):
         """Dashboard de Business Intelligence"""
         if not self.performance_metrics['response_times']:
-            return "Dados insuficientes para análise"
+            return "Dados insuficientes para análise", None
             
         # Preparar dados
         metrics_df = pd.DataFrame({
@@ -846,78 +844,38 @@ def humanizar_texto(texto):
     
     return ' '.join(palavras)
 
-# Funções de áudio
-def gravar_audio(duracao=5, arquivo="audio.wav"):
-    try:
-        audio = pyaudio.PyAudio()
-        stream = audio.open(
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=16000,
-            input=True,
-            frames_per_buffer=1024
-        )
-        
-        frames = []
-        
-        for i in range(0, int(16000 / 1024 * duracao)):
-            data = stream.read(1024, exception_on_overflow=False)
-            frames.append(data)
-        
-        stream.stop_stream()
-        stream.close()
-        audio.terminate()
-        
-        with wave.open(arquivo, 'wb') as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(audio.get_sample_size(pyaudio.paInt16))
-            wf.setframerate(16000)
-            wf.writeframes(b''.join(frames))
-            
-        return arquivo
-    except Exception as e:
-        st.error(f"Erro na gravação: {str(e)}")
-        return None
-
+# Funções de áudio atualizadas
 def transcrever_audio(arquivo):
+    """Transcreve áudio usando a API da OpenAI"""
     try:
-        if not arquivo or not os.path.exists(arquivo):
-            return ""
-            
-        with open(arquivo, 'rb') as f:
-            resultado = op.Audio.transcribe('whisper-1', f, language='pt')
-            return resultado['text'].strip()
+        resultado = op.Audio.transcribe('whisper-1', arquivo, language='pt')
+        return resultado['text'].strip()
     except Exception as e:
         st.error(f"Erro na transcrição: {str(e)}")
         return ""
 
 def falar_texto(texto, lang='pt'):
+    """Sintetiza voz usando gTTS"""
     try:
         if not texto:
             return None
             
-        # Pré-processamento para humanizar a fala
         texto_humanizado = humanizar_texto(texto)
-        
-        # Ajustar velocidade baseado na configuração
         velocidade = st.session_state.velocidade
         slow = velocidade < 1.0
         
-        # Parâmetros ajustados para naturalidade
         tts = gTTS(
             text=texto_humanizado, 
             lang=lang,
-            tld='com.br',  # Sotaque brasileiro
+            tld='com.br',
             slow=slow,
             lang_check=False
         )
         
-        # Geração de áudio em memória
         audio_buffer = io.BytesIO()
         tts.write_to_fp(audio_buffer)
         audio_bytes = audio_buffer.getvalue()
         
-        # Reproduzir áudio
         st.audio(audio_bytes, format='audio/mp3', autoplay=True)
         return audio_bytes
     except Exception as e:
@@ -1212,7 +1170,6 @@ with st.sidebar:
     
     # Controle de voz
     st.markdown("### 🎤 Controles de Voz")
-    duracao_gravacao = st.slider("Duração da gravação (seg)", 3, 10, 5, key="voice_duration")
     
     # Colaboração
     st.markdown("### 👥 Colaboração")
@@ -1391,109 +1348,67 @@ with tab_research:
 with tab_voice:
     st.header("🎤 Modo Voz Completo")
     
-    st.markdown("""
-    <div class='voice-panel'>
-        <h3>Interação por Voz</h3>
-        <p>Converse naturalmente com o assistente usando seu microfone</p>
+    st.subheader("🎤 Carregar Áudio")
+    audio_file = st.file_uploader("Carregar arquivo de áudio (WAV, MP3)", type=["wav", "mp3"])
+    
+    if audio_file is not None:
+        pergunta = transcrever_audio(audio_file)
         
-        <div class='voice-visualizer'>
-            <div class='voice-bar'></div>
-            <div class='voice-bar'></div>
-            <div class='voice-bar'></div>
-            <div class='voice-bar'></div>
-            <div class='voice-bar'></div>
-            <div class='voice-bar'></div>
-            <div class='voice-bar'></div>
-            <div class='voice-bar'></div>
-            <div class='voice-bar'></div>
-            <div class='voice-bar'></div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Gravação de Voz")
-        if st.button("🎤 Iniciar Gravação", use_container_width=True, key="voice_record_btn"):
-            arquivo = "voice_temp.wav"
-            resultado = gravar_audio(duracao_gravacao, arquivo)
+        if pergunta:
+            st.session_state.voice_question = pergunta
+            st.success("Áudio transcrito com sucesso!")
+            st.markdown(f"**Pergunta detectada:** {pergunta}")
             
-            if resultado:
-                pergunta = transcrever_audio(arquivo)
-                os.remove(arquivo)
-                
-                if pergunta:
-                    st.session_state.voice_question = pergunta
-                    st.success("Áudio transcrito com sucesso!")
-                    st.markdown(f"**Pergunta detectada:** {pergunta}")
-                    
-                    # Análise de sentimento
-                    sentiment = st.session_state.assistant.analyze_sentiment(arquivo)
-                    st.info(f"Sentimento detectado: {sentiment.capitalize()}")
-                else:
-                    st.error("Não foi possível transcrever o áudio")
+            # Análise de sentimento
+            try:
+                sentiment = st.session_state.assistant.analyze_sentiment(audio_file)
+                st.info(f"Sentimento detectado: {sentiment.capitalize()}")
+            except Exception as e:
+                st.error(f"Erro na análise de sentimento: {str(e)}")
+        else:
+            st.error("Não foi possível transcrever o áudio")
     
-    with col2:
-        st.subheader("Processamento")
-        if 'voice_question' in st.session_state and st.session_state.voice_question:
-            if st.button("🧠 Processar Pergunta", use_container_width=True, key="process_voice_btn"):
-                # Reiniciar indicadores
-                st.session_state.assistant.current_thought = "Processando pergunta de voz..."
-                st.session_state.assistant.current_progress = 0
-                st.session_state.thought_ui.markdown(f"💭 **Pensando:** {st.session_state.assistant.current_thought}")
-                st.session_state.progress_ui.progress(0)
+    if 'voice_question' in st.session_state and st.session_state.voice_question:
+        if st.button("🧠 Processar Pergunta", use_container_width=True, key="process_voice_btn"):
+            # Reiniciar indicadores
+            st.session_state.assistant.current_thought = "Processando pergunta de voz..."
+            st.session_state.assistant.current_progress = 0
+            st.session_state.thought_ui.markdown(f"💭 **Pensando:** {st.session_state.assistant.current_thought}")
+            st.session_state.progress_ui.progress(0)
+            
+            start_time = time.time()
+            with st.spinner("Processando pergunta de voz..."):
+                resposta, analysis, research, evaluation = st.session_state.assistant.analyze_and_decide(st.session_state.voice_question)
+                end_time = time.time()
                 
-                start_time = time.time()
-                with st.spinner("Processando pergunta de voz..."):
-                    resposta, analysis, research, evaluation = st.session_state.assistant.analyze_and_decide(st.session_state.voice_question)
-                    end_time = time.time()
-                    
-                    # Coletar métricas de precisão
-                    accuracy_prompt = f"""
-                    Avalie a precisão da resposta em uma escala de 0-1:
-                    Pergunta: {st.session_state.voice_question}
-                    Resposta: {resposta}
-                    """
-                    try:
-                        accuracy = op.ChatCompletion.create(
-                            model="gpt-3.5-turbo",
-                            messages=[{"role": "user", "content": accuracy_prompt}],
-                            max_tokens=10,
-                            temperature=0.0
-                        ).choices[0].message['content'].strip()
-                        accuracy = float(accuracy)
-                    except:
-                        accuracy = 0.8
-                    
-                    # Registrar métricas
-                    st.session_state.assistant.monitor_performance(
-                        response_time=end_time - start_time,
-                        accuracy=accuracy,
-                        user_rating=5
-                    )
-                    
-                    # Registro no histórico
-                    st.session_state['history'].append({
-                        "pergunta": st.session_state.voice_question,
-                        "resposta": resposta,
-                        "analise": analysis,
-                        "pesquisa": research,
-                        "avaliacao": evaluation,
-                        "modo": "voz"
-                    })
+                # Registrar métricas
+                st.session_state.assistant.monitor_performance(
+                    response_time=end_time - start_time,
+                    accuracy=0.8,  # Valor padrão
+                    user_rating=5
+                )
                 
-                # Exibir resposta
-                st.markdown(f"""
-                <div class='history-item'>
-                    <h4>Resposta:</h4>
-                    <p>{resposta}</p>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Reproduzir áudio
-                falar_texto(resposta, lang=st.session_state.idioma)
-        
+                # Registro no histórico
+                st.session_state['history'].append({
+                    "pergunta": st.session_state.voice_question,
+                    "resposta": resposta,
+                    "analise": analysis,
+                    "pesquisa": research,
+                    "avaliacao": evaluation,
+                    "modo": "voz"
+                })
+            
+            # Exibir resposta
+            st.markdown(f"""
+            <div class='history-item'>
+                <h4>Resposta:</h4>
+                <p>{resposta}</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Reproduzir áudio
+            falar_texto(resposta, lang=st.session_state.idioma)
+    
     # Histórico de voz
     st.subheader("Histórico de Conversas por Voz")
     voice_history = [h for h in st.session_state['history'] if h.get('modo') == 'voz']
